@@ -128,11 +128,13 @@ export class Broadphase {
       const id1 = p1[i].id
       const id2 = p2[i].id
       const key = id1 < id2 ? `${id1},${id2}` : `${id2},${id1}`
+      if (!(key in t)) {
+        t.keys.push(key)
+      }
       t[key] = i
-      t.keys.push(key)
     }
 
-    for (let i = 0; i !== t.keys.length; i++) {
+    while (t.keys.length > 0) {
       const key = t.keys.pop()
       const pairIndex = t[key]
       pairs1.push(p1[pairIndex])

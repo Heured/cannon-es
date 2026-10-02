@@ -687,7 +687,7 @@ class Vec3 {
   }
   /**
    * Normalize the vector. Note that this changes the values in the vector.
-    * @return Returns the norm of the vector
+     * @return Returns the norm of the vector
    */
 
 
@@ -4095,11 +4095,15 @@ class Broadphase {
       const id1 = p1[i].id;
       const id2 = p2[i].id;
       const key = id1 < id2 ? `${id1},${id2}` : `${id2},${id1}`;
+
+      if (!(key in t)) {
+        t.keys.push(key);
+      }
+
       t[key] = i;
-      t.keys.push(key);
     }
 
-    for (let i = 0; i !== t.keys.length; i++) {
+    while (t.keys.length > 0) {
       const key = t.keys.pop();
       const pairIndex = t[key];
       pairs1.push(p1[pairIndex]);
@@ -4148,6 +4152,623 @@ const Broadphase_makePairsUnique_temp = {
 const Broadphase_makePairsUnique_p1 = [];
 const Broadphase_makePairsUnique_p2 = [];
 new Vec3();
+
+/**
+ * Computes the surface area of an AABB.
+ */
+function SurfaceArea(a) {
+  const Dx = a.upperBound.x - a.lowerBound.x;
+  const Dy = a.upperBound.y - a.lowerBound.y;
+  const Dz = a.upperBound.z - a.lowerBound.z;
+  return 2 * (Dx * Dy + Dy * Dz + Dz * Dx);
+}
+/**
+ * Computes the surface area of the union of two AABBs, without allocating.
+ */
+
+
+function CombinedSurfaceArea(a, b) {
+  const Dx = Math.max(a.upperBound.x, b.upperBound.x) - Math.min(a.lowerBound.x, b.lowerBound.x);
+  const Dy = Math.max(a.upperBound.y, b.upperBound.y) - Math.min(a.lowerBound.y, b.lowerBound.y);
+  const Dz = Math.max(a.upperBound.z, b.upperBound.z) - Math.min(a.lowerBound.z, b.lowerBound.z);
+  return 2 * (Dx * Dy + Dy * Dz + Dz * Dx);
+}
+/**
+ * Stores the union of two AABBs into the out AABB.
+ */
+
+
+function SetUnion(a, b, out) {
+  out.lowerBound.x = Math.min(a.lowerBound.x, b.lowerBound.x);
+  out.lowerBound.y = Math.min(a.lowerBound.y, b.lowerBound.y);
+  out.lowerBound.z = Math.min(a.lowerBound.z, b.lowerBound.z);
+  out.upperBound.x = Math.max(a.upperBound.x, b.upperBound.x);
+  out.upperBound.y = Math.max(a.upperBound.y, b.upperBound.y);
+  out.upperBound.z = Math.max(a.upperBound.z, b.upperBound.z);
+}
+/**
+ * A node of the Dynamic AABB Tree.
+ *
+ * Leaf nodes hold a single body, while internal nodes hold the AABB of their
+ * subtree. The AABB stored on every node is a "fat" AABB, inflated by a small
+ * margin, so that slowly moving bodies do not need to be reinserted every step.
+ */
+
+
+class DynamicAABBNode {
+  /**
+   * The (fat) axis aligned bounding box of this node.
+   */
+
+  /**
+   * The parent node, or null if this node is the root.
+   */
+
+  /**
+   * The first child, or null if this node is a leaf.
+   */
+
+  /**
+   * The second child, or null if this node is a leaf.
+   */
+
+  /**
+   * The body this leaf represents, or null for internal nodes.
+   */
+
+  /**
+   * The height of the subtree rooted at this node. Leaf nodes have height 0.
+   */
+
+  /**
+   * A unique identifier used to de-duplicate collision pairs.
+   */
+  constructor() {
+    this.Aabb = new AABB();
+    this.Parent = null;
+    this.Child1 = null;
+    this.Child2 = null;
+    this.Body = null;
+    this.Height = 0;
+    this.Id = 0;
+  }
+  /**
+   * Returns true if this node is a leaf node.
+   */
+
+
+  IsLeaf() {
+    return this.Child1 === null;
+  }
+
+}
+/**
+ * Dynamic AABB Tree broadphase.
+ *
+ * Bodies are inserted into a bounding volume hierarchy of axis aligned bounding
+ * boxes. The tree is rebuilt incrementally as bodies move, and overlapping
+ * leaves are reported as collision candidates. This makes it well suited for
+ * worlds with many dynamic bodies and few static ones.
+ */
+
+
+class DynamicAABBTreeBroadphase extends Broadphase {
+  /**
+   * The root of the tree.
+   */
+
+  /**
+   * The margin added to the AABB of every body. A larger margin keeps bodies
+   * in the tree for longer before they are reinserted, at the cost of more
+   * candidate pairs.
+   */
+
+  /**
+   * The bodies currently inserted in the tree.
+   */
+
+  /**
+   * Maps each body to its leaf node.
+   */
+
+  /**
+   * A pool of reusable tree nodes.
+   */
+
+  /**
+   * A counter used to give every leaf node a unique identifier.
+   */
+
+  /**
+   * A reusable stack for the tree queries.
+   */
+  constructor(world) {
+    super();
+    this.Root = null;
+    this.FatAABBMargin = 0.1;
+    this.Bodies = [];
+    this.BodyToLeaf = new Map();
+    this.FreeList = [];
+    this.NextId = 0;
+    this.Stack = [];
+
+    this.AddBodyHandler = event => {
+      this.InsertBody(event.body);
+    };
+
+    this.RemoveBodyHandler = event => {
+      this.RemoveBody(event.body);
+    };
+
+    if (world) {
+      this.setWorld(world);
+    }
+  }
+  /**
+   * Change the world. The tree is cleared and rebuilt from the new world.
+   */
+
+
+  setWorld(world) {
+    this.Clear();
+
+    for (let i = 0; i < world.bodies.length; i++) {
+      this.InsertBody(world.bodies[i]);
+    }
+
+    const oldWorld = this.world;
+
+    if (oldWorld) {
+      oldWorld.removeEventListener('addBody', this.AddBodyHandler);
+      oldWorld.removeEventListener('removeBody', this.RemoveBodyHandler);
+    }
+
+    world.addEventListener('addBody', this.AddBodyHandler);
+    world.addEventListener('removeBody', this.RemoveBodyHandler);
+    this.world = world;
+    this.dirty = true;
+  }
+  /**
+   * Remove all bodies from the tree.
+   */
+
+
+  Clear() {
+    this.Root = null;
+    this.Bodies.length = 0;
+    this.BodyToLeaf.clear();
+    this.FreeList.length = 0;
+    this.NextId = 0;
+  }
+  /**
+   * Insert a body into the tree.
+   */
+
+
+  InsertBody(body) {
+    if (this.BodyToLeaf.has(body)) {
+      return;
+    }
+
+    if (body.aabbNeedsUpdate) {
+      body.updateAABB();
+    }
+
+    const Leaf = this.AllocateNode(body);
+    this.SetFatAabb(body, Leaf.Aabb);
+    this.InsertLeaf(Leaf);
+    Leaf.Id = this.NextId++;
+    this.BodyToLeaf.set(body, Leaf);
+    this.Bodies.push(body);
+  }
+  /**
+   * Remove a body from the tree.
+   */
+
+
+  RemoveBody(body) {
+    const Leaf = this.BodyToLeaf.get(body);
+
+    if (Leaf === undefined) {
+      return;
+    }
+
+    this.RemoveLeaf(Leaf);
+    this.FreeList.push(Leaf);
+    this.BodyToLeaf.delete(body);
+    const Index = this.Bodies.indexOf(body);
+
+    if (Index !== -1) {
+      this.Bodies.splice(Index, 1);
+    }
+  }
+  /**
+   * Collect all collision pairs.
+   */
+
+
+  collisionPairs(world, p1, p2) {
+    this.UpdateTree();
+    const Bodies = this.Bodies;
+
+    for (let i = 0; i !== Bodies.length; i++) {
+      const QueryLeaf = this.BodyToLeaf.get(Bodies[i]);
+      this.QueryTree(QueryLeaf.Aabb, FoundLeaf => {
+        if (FoundLeaf.Id <= QueryLeaf.Id) {
+          return;
+        }
+
+        const BodyA = QueryLeaf.Body;
+        const BodyB = FoundLeaf.Body;
+
+        if (!this.needBroadphaseCollision(BodyA, BodyB)) {
+          return;
+        }
+
+        this.intersectionTest(BodyA, BodyB, p1, p2);
+      });
+    }
+  }
+  /**
+   * Returns all the bodies within an AABB.
+   * @param result An array to store resulting bodies in.
+   */
+
+
+  aabbQuery(world, aabb, result) {
+    if (result === void 0) {
+      result = [];
+    }
+
+    this.UpdateTree();
+    this.QueryTree(aabb, Leaf => {
+      const Body = Leaf.Body;
+
+      if (Body.aabb.overlaps(aabb)) {
+        result.push(Body);
+      }
+    });
+    return result;
+  }
+  /**
+   * Reinserts every body whose AABB has left its fat AABB.
+   */
+
+
+  UpdateTree() {
+    const Bodies = this.Bodies;
+
+    for (let i = 0; i !== Bodies.length; i++) {
+      const Body = Bodies[i];
+
+      if (Body.aabbNeedsUpdate) {
+        Body.updateAABB();
+        const Leaf = this.BodyToLeaf.get(Body);
+
+        if (Leaf !== undefined && !Leaf.Aabb.contains(Body.aabb)) {
+          this.RemoveLeaf(Leaf);
+          this.SetFatAabb(Body, Leaf.Aabb);
+          this.InsertLeaf(Leaf);
+        }
+      }
+    }
+  }
+  /**
+   * Queries the tree for every leaf whose fat AABB overlaps the given AABB.
+   */
+
+
+  QueryTree(aabb, callback) {
+    const Stack = this.Stack;
+    Stack.length = 0;
+
+    if (this.Root === null) {
+      return;
+    }
+
+    Stack.push(this.Root);
+
+    while (Stack.length > 0) {
+      const Node = Stack.pop();
+
+      if (Node.IsLeaf()) {
+        if (Node.Aabb.overlaps(aabb)) {
+          callback(Node);
+        }
+      } else {
+        if (Node.Aabb.overlaps(aabb)) {
+          Stack.push(Node.Child1);
+          Stack.push(Node.Child2);
+        }
+      }
+    }
+  }
+  /**
+   * Inflates the body AABB by the fat margin and stores it in out.
+   */
+
+
+  SetFatAabb(body, out) {
+    out.copy(body.aabb);
+    const Margin = this.FatAABBMargin + 0.05 * body.boundingRadius;
+    out.lowerBound.x -= Margin;
+    out.lowerBound.y -= Margin;
+    out.lowerBound.z -= Margin;
+    out.upperBound.x += Margin;
+    out.upperBound.y += Margin;
+    out.upperBound.z += Margin;
+  }
+  /**
+   * Returns a node from the free list, or a new one.
+   */
+
+
+  AllocateNode(body) {
+    const Node = this.FreeList.pop();
+
+    if (Node) {
+      Node.Body = body;
+      Node.Child1 = null;
+      Node.Child2 = null;
+      Node.Parent = null;
+      Node.Height = 0;
+      return Node;
+    }
+
+    const NewNode = new DynamicAABBNode();
+    NewNode.Body = body;
+    return NewNode;
+  }
+  /**
+   * Inserts a leaf into the tree, using a surface area heuristic to pick the
+   * best sibling, and rebalances the tree on the way back up.
+   */
+
+
+  InsertLeaf(leaf) {
+    if (this.Root === null) {
+      this.Root = leaf;
+      this.Root.Parent = null;
+      return;
+    } // Find the best sibling for the leaf.
+
+
+    const LeafAabb = leaf.Aabb;
+    let Index = this.Root;
+
+    while (!Index.IsLeaf()) {
+      const Child1 = Index.Child1;
+      const Child2 = Index.Child2;
+      const Area = SurfaceArea(Index.Aabb);
+      const CombinedArea = CombinedSurfaceArea(Index.Aabb, LeafAabb); // Cost of creating a new parent for this node and the new leaf.
+
+      const Cost = 2 * CombinedArea; // Minimum cost of pushing the leaf further down the tree.
+
+      const InheritanceCost = 2 * (CombinedArea - Area); // Cost of descending into Child1.
+
+      let Cost1;
+
+      if (Child1.IsLeaf()) {
+        Cost1 = CombinedSurfaceArea(Child1.Aabb, LeafAabb) + InheritanceCost;
+      } else {
+        const OldArea = SurfaceArea(Child1.Aabb);
+        const NewArea = CombinedSurfaceArea(Child1.Aabb, LeafAabb);
+        Cost1 = NewArea - OldArea + InheritanceCost;
+      } // Cost of descending into Child2.
+
+
+      let Cost2;
+
+      if (Child2.IsLeaf()) {
+        Cost2 = CombinedSurfaceArea(Child2.Aabb, LeafAabb) + InheritanceCost;
+      } else {
+        const OldArea = SurfaceArea(Child2.Aabb);
+        const NewArea = CombinedSurfaceArea(Child2.Aabb, LeafAabb);
+        Cost2 = NewArea - OldArea + InheritanceCost;
+      } // Descend according to the minimum cost.
+
+
+      if (Cost < Cost1 && Cost < Cost2) {
+        break;
+      }
+
+      if (Cost1 < Cost2) {
+        Index = Child1;
+      } else {
+        Index = Child2;
+      }
+    }
+
+    const Sibling = Index; // Create a new parent for the siblings.
+
+    const OldParent = Sibling.Parent;
+    const NewParent = this.AllocateNode(null);
+    NewParent.Parent = OldParent;
+    SetUnion(LeafAabb, Sibling.Aabb, NewParent.Aabb);
+    NewParent.Height = Sibling.Height + 1;
+
+    if (OldParent !== null) {
+      // The sibling was not the root.
+      if (OldParent.Child1 === Sibling) {
+        OldParent.Child1 = NewParent;
+      } else {
+        OldParent.Child2 = NewParent;
+      }
+
+      NewParent.Child1 = Sibling;
+      NewParent.Child2 = leaf;
+      Sibling.Parent = NewParent;
+      leaf.Parent = NewParent;
+    } else {
+      // The sibling was the root.
+      NewParent.Child1 = Sibling;
+      NewParent.Child2 = leaf;
+      Sibling.Parent = NewParent;
+      leaf.Parent = NewParent;
+      this.Root = NewParent;
+    } // Walk back up the tree fixing heights and AABBs.
+
+
+    let Node = leaf.Parent;
+
+    while (Node !== null) {
+      Node = this.Balance(Node);
+      const Child1 = Node.Child1;
+      const Child2 = Node.Child2;
+      Node.Height = 1 + Math.max(Child1.Height, Child2.Height);
+      SetUnion(Child1.Aabb, Child2.Aabb, Node.Aabb);
+      Node = Node.Parent;
+    }
+  }
+  /**
+   * Removes a leaf from the tree, reconnecting its sibling to the grandparent.
+   */
+
+
+  RemoveLeaf(leaf) {
+    if (leaf === this.Root) {
+      this.Root = null;
+      return;
+    }
+
+    const Parent = leaf.Parent;
+    const GrandParent = Parent.Parent;
+    const Sibling = Parent.Child1 === leaf ? Parent.Child2 : Parent.Child1;
+
+    if (GrandParent !== null) {
+      // Destroy Parent and connect Sibling to GrandParent.
+      if (GrandParent.Child1 === Parent) {
+        GrandParent.Child1 = Sibling;
+      } else {
+        GrandParent.Child2 = Sibling;
+      }
+
+      Sibling.Parent = GrandParent;
+      this.FreeList.push(Parent); // Adjust ancestor bounds.
+
+      let Node = GrandParent;
+
+      while (Node !== null) {
+        Node = this.Balance(Node);
+        const Child1 = Node.Child1;
+        const Child2 = Node.Child2;
+        SetUnion(Child1.Aabb, Child2.Aabb, Node.Aabb);
+        Node.Height = 1 + Math.max(Child1.Height, Child2.Height);
+        Node = Node.Parent;
+      }
+    } else {
+      // Parent was the root, so Sibling becomes the new root.
+      this.Root = Sibling;
+      Sibling.Parent = null;
+      this.FreeList.push(Parent);
+    } // Detach the leaf so it can be reused later.
+
+
+    leaf.Parent = null;
+    leaf.Child1 = null;
+    leaf.Child2 = null;
+    leaf.Height = 0;
+  }
+  /**
+   * Rotates the tree around the given node when its children are unbalanced.
+   * @return The new root of the rotated subtree.
+   */
+
+
+  Balance(a) {
+    if (a.IsLeaf() || a.Height < 2) {
+      return a;
+    }
+
+    const B = a.Child1;
+    const C = a.Child2;
+    const Balance = C.Height - B.Height; // Rotate C up.
+
+    if (Balance > 1) {
+      const F = C.Child1;
+      const G = C.Child2; // Swap A and C.
+
+      C.Child1 = a;
+      C.Parent = a.Parent;
+      a.Parent = C; // A's old parent should point to C.
+
+      if (C.Parent !== null) {
+        if (C.Parent.Child1 === a) {
+          C.Parent.Child1 = C;
+        } else {
+          C.Parent.Child2 = C;
+        }
+      } else {
+        this.Root = C;
+      } // Rotate.
+
+
+      if (F.Height > G.Height) {
+        C.Child2 = F;
+        a.Child2 = G;
+        G.Parent = a;
+        SetUnion(a.Child1.Aabb, G.Aabb, a.Aabb);
+        SetUnion(a.Aabb, F.Aabb, C.Aabb);
+        a.Height = 1 + Math.max(a.Child1.Height, a.Child2.Height);
+        C.Height = 1 + Math.max(a.Height, F.Height);
+      } else {
+        C.Child2 = G;
+        a.Child2 = F;
+        F.Parent = a;
+        SetUnion(a.Child1.Aabb, F.Aabb, a.Aabb);
+        SetUnion(a.Aabb, G.Aabb, C.Aabb);
+        a.Height = 1 + Math.max(a.Child1.Height, a.Child2.Height);
+        C.Height = 1 + Math.max(a.Height, G.Height);
+      }
+
+      return C;
+    } // Rotate B up.
+
+
+    if (Balance < -1) {
+      const D = B.Child1;
+      const E = B.Child2; // Swap A and B.
+
+      B.Child1 = a;
+      B.Parent = a.Parent;
+      a.Parent = B; // A's old parent should point to B.
+
+      if (B.Parent !== null) {
+        if (B.Parent.Child1 === a) {
+          B.Parent.Child1 = B;
+        } else {
+          B.Parent.Child2 = B;
+        }
+      } else {
+        this.Root = B;
+      } // Rotate.
+
+
+      if (D.Height > E.Height) {
+        B.Child2 = D;
+        a.Child1 = E;
+        E.Parent = a;
+        SetUnion(a.Child2.Aabb, E.Aabb, a.Aabb);
+        SetUnion(a.Aabb, D.Aabb, B.Aabb);
+        a.Height = 1 + Math.max(a.Child1.Height, a.Child2.Height);
+        B.Height = 1 + Math.max(a.Height, D.Height);
+      } else {
+        B.Child2 = E;
+        a.Child1 = D;
+        D.Parent = a;
+        SetUnion(a.Child2.Aabb, D.Aabb, a.Aabb);
+        SetUnion(a.Aabb, E.Aabb, B.Aabb);
+        a.Height = 1 + Math.max(a.Child1.Height, a.Child2.Height);
+        B.Height = 1 + Math.max(a.Height, E.Height);
+      }
+
+      return B;
+    }
+
+    return a;
+  }
+
+}
 
 /**
  * Axis aligned uniform grid broadphase.
@@ -4437,6 +5058,421 @@ class GridBroadphase extends Broadphase {
 }
 const GridBroadphase_collisionPairs_d = new Vec3();
 new Vec3();
+
+/**
+ * Returns the lower bound of an AABB along the given axis.
+ */
+function GetLower(a, axis) {
+  if (axis === 0) {
+    return a.lowerBound.x;
+  }
+
+  if (axis === 1) {
+    return a.lowerBound.y;
+  }
+
+  return a.lowerBound.z;
+}
+/**
+ * Returns the upper bound of an AABB along the given axis.
+ */
+
+
+function GetUpper(a, axis) {
+  if (axis === 0) {
+    return a.upperBound.x;
+  }
+
+  if (axis === 1) {
+    return a.upperBound.y;
+  }
+
+  return a.upperBound.z;
+}
+/**
+ * Axis aligned uniform grid broadphase, with sweep and prune inside every cell.
+ *
+ * The world space is divided into a uniform grid of cells. Every body is
+ * inserted into every cell its bounding box overlaps, which acts as a cheap
+ * coarse filter. Inside each cell the bodies are then sorted along an axis and
+ * swept, exactly like the SAP broadphase, so only pairs that overlap along the
+ * axis are tested. Duplicate pairs that appear in more than one cell are
+ * removed at the end.
+ */
+
+
+class GridSAPBroadphase extends Broadphase {
+  /**
+   * Number of cells along x.
+   */
+
+  /**
+   * Number of cells along y.
+   */
+
+  /**
+   * Number of cells along z.
+   */
+
+  /**
+   * aabbMin
+   */
+
+  /**
+   * aabbMax
+   */
+
+  /**
+   * bins
+   */
+
+  /**
+   * binLengths
+   */
+
+  /**
+   * Axis to sort the bodies along inside every cell.
+   * Set to 0 for the x axis, 1 for the y axis and 2 for the z axis.
+   * For best performance, pick the axis where bodies are most distributed.
+   */
+
+  /**
+   * @param aabbMin The minimum corner of the grid.
+   * @param aabbMax The maximum corner of the grid.
+   * @param nx Number of cells along x.
+   * @param ny Number of cells along y.
+   * @param nz Number of cells along z.
+   */
+  constructor(aabbMin, aabbMax, nx, ny, nz) {
+    if (aabbMin === void 0) {
+      aabbMin = new Vec3(100, 100, 100);
+    }
+
+    if (aabbMax === void 0) {
+      aabbMax = new Vec3(-100, -100, -100);
+    }
+
+    if (nx === void 0) {
+      nx = 10;
+    }
+
+    if (ny === void 0) {
+      ny = 10;
+    }
+
+    if (nz === void 0) {
+      nz = 10;
+    }
+
+    super();
+    this.nx = nx;
+    this.ny = ny;
+    this.nz = nz;
+    this.aabbMin = aabbMin;
+    this.aabbMax = aabbMax;
+    this.axisIndex = 0;
+    const NBins = this.nx * this.ny * this.nz;
+
+    if (NBins <= 0) {
+      throw "GridSAPBroadphase: Each dimension's n must be >0";
+    }
+
+    this.bins = [];
+    this.binLengths = []; // Rather than continually resizing arrays (thrashing the memory), just record length and allow them to grow
+
+    this.bins.length = NBins;
+    this.binLengths.length = NBins;
+
+    for (let i = 0; i < NBins; i++) {
+      this.bins[i] = [];
+      this.binLengths[i] = 0;
+    }
+  }
+  /**
+   * Get all the collision pairs in the physics world.
+   */
+
+
+  collisionPairs(world, p1, p2) {
+    const Bodies = world.bodies;
+    const N = Bodies.length;
+    const Max = this.aabbMax;
+    const Min = this.aabbMin;
+    const Nx = this.nx;
+    const Ny = this.ny;
+    const Nz = this.nz;
+    const AxisIndex = this.axisIndex;
+    const XStep = Ny * Nz;
+    const YStep = Nz;
+    const ZStep = 1;
+    const XMax = Max.x;
+    const YMax = Max.y;
+    const ZMax = Max.z;
+    const XMin = Min.x;
+    const YMin = Min.y;
+    const ZMin = Min.z;
+    const XMult = Nx / (XMax - XMin);
+    const YMult = Ny / (YMax - YMin);
+    const ZMult = Nz / (ZMax - ZMin);
+    const Bins = this.bins;
+    const BinLengths = this.binLengths;
+    const NBins = Bins.length; // Update AABBs and reset the bins.
+
+    for (let i = 0; i !== N; i++) {
+      const Body = Bodies[i];
+
+      if (Body.aabbNeedsUpdate) {
+        Body.updateAABB();
+      }
+    }
+
+    for (let i = 0; i !== NBins; i++) {
+      BinLengths[i] = 0;
+    }
+
+    const Ceil = Math.ceil; // Put every body into every cell its bounding box overlaps.
+
+    for (let i = 0; i !== N; i++) {
+      const Body = Bodies[i];
+      const Aabb = Body.aabb;
+      let XOff0 = (Aabb.lowerBound.x - XMin) * XMult | 0;
+      let YOff0 = (Aabb.lowerBound.y - YMin) * YMult | 0;
+      let ZOff0 = (Aabb.lowerBound.z - ZMin) * ZMult | 0;
+      let XOff1 = Ceil((Aabb.upperBound.x - XMin) * XMult);
+      let YOff1 = Ceil((Aabb.upperBound.y - YMin) * YMult);
+      let ZOff1 = Ceil((Aabb.upperBound.z - ZMin) * ZMult);
+
+      if (XOff0 < 0) {
+        XOff0 = 0;
+      } else if (XOff0 >= Nx) {
+        XOff0 = Nx - 1;
+      }
+
+      if (YOff0 < 0) {
+        YOff0 = 0;
+      } else if (YOff0 >= Ny) {
+        YOff0 = Ny - 1;
+      }
+
+      if (ZOff0 < 0) {
+        ZOff0 = 0;
+      } else if (ZOff0 >= Nz) {
+        ZOff0 = Nz - 1;
+      }
+
+      if (XOff1 < 0) {
+        XOff1 = 0;
+      } else if (XOff1 >= Nx) {
+        XOff1 = Nx - 1;
+      }
+
+      if (YOff1 < 0) {
+        YOff1 = 0;
+      } else if (YOff1 >= Ny) {
+        YOff1 = Ny - 1;
+      }
+
+      if (ZOff1 < 0) {
+        ZOff1 = 0;
+      } else if (ZOff1 >= Nz) {
+        ZOff1 = Nz - 1;
+      }
+
+      XOff0 *= XStep;
+      YOff0 *= YStep;
+      ZOff0 *= ZStep;
+      XOff1 *= XStep;
+      YOff1 *= YStep;
+      ZOff1 *= ZStep;
+
+      for (let XOff = XOff0; XOff <= XOff1; XOff += XStep) {
+        for (let YOff = YOff0; YOff <= YOff1; YOff += YStep) {
+          for (let ZOff = ZOff0; ZOff <= ZOff1; ZOff += ZStep) {
+            const Index = XOff + YOff + ZOff;
+            Bins[Index][BinLengths[Index]++] = Body;
+          }
+        }
+      }
+    } // Sweep and prune inside every cell.
+
+
+    for (let i = 0; i !== NBins; i++) {
+      const BinLength = BinLengths[i];
+
+      if (BinLength > 1) {
+        const Bin = Bins[i]; // Only sort the bodies that were actually added to this cell.
+
+        Bin.length = BinLength; // Sort along the chosen axis, by the lower bound of the bounding box.
+
+        Bin.sort((A, B) => GetLower(A.aabb, AxisIndex) - GetLower(B.aabb, AxisIndex));
+
+        for (let Xi = 0; Xi !== BinLength; Xi++) {
+          const BodyA = Bin[Xi];
+          const MaxBound = GetUpper(BodyA.aabb, AxisIndex);
+
+          for (let Yi = Xi + 1; Yi !== BinLength; Yi++) {
+            const BodyB = Bin[Yi];
+
+            if (GetLower(BodyB.aabb, AxisIndex) > MaxBound) {
+              break;
+            }
+
+            if (!this.needBroadphaseCollision(BodyA, BodyB)) {
+              continue;
+            }
+
+            this.intersectionTest(BodyA, BodyB, p1, p2);
+          }
+        }
+      }
+    } // A body that spans several cells produces the same pair in each of
+    // them, so remove the duplicates before returning.
+
+
+    this.makePairsUnique(p1, p2);
+  }
+  /**
+   * Returns all the bodies within an AABB.
+   * @param result An array to store resulting bodies in.
+   */
+
+
+  aabbQuery(world, aabb, result) {
+    if (result === void 0) {
+      result = [];
+    }
+
+    for (let i = 0; i < world.bodies.length; i++) {
+      const Body = world.bodies[i];
+
+      if (Body.aabbNeedsUpdate) {
+        Body.updateAABB();
+      }
+
+      if (Body.aabb.overlaps(aabb)) {
+        result.push(Body);
+      }
+    }
+
+    return result;
+  }
+
+}
+
+/**
+ * Multi Box Pruning broadphase.
+ *
+ * The bodies are sorted along the x axis by the lower bound of their bounding
+ * box, then swept to collect candidate pairs that overlap on x. Each candidate
+ * pair is filtered against the y and z axes, so only pairs whose bounding boxes
+ * overlap on all three axes are reported. This reduces the O(N^2) work of the
+ * naive broadphase to the number of pairs that actually overlap on x.
+ */
+class MultiBoxPruningBroadphase extends Broadphase {
+  /**
+   * The bodies of the world, sorted along the x axis. Reused across steps to
+   * avoid allocations.
+   */
+  constructor() {
+    super();
+    this.AxisList = [];
+  }
+  /**
+   * Get all the collision pairs in the physics world.
+   */
+
+
+  collisionPairs(world, p1, p2) {
+    const Bodies = world.bodies;
+    const N = Bodies.length; // Update AABBs and copy the bodies into the sorted list.
+
+    const AxisList = this.AxisList;
+    AxisList.length = 0;
+
+    for (let i = 0; i !== N; i++) {
+      const Body = Bodies[i];
+
+      if (Body.aabbNeedsUpdate) {
+        Body.updateAABB();
+      }
+
+      AxisList.push(Body);
+    } // Sort along the x axis by the lower bound of the bounding box.
+
+
+    AxisList.sort((a, b) => a.aabb.lowerBound.x - b.aabb.lowerBound.x);
+    let j; // Sweep along x, testing the y and z axes for each candidate pair.
+
+    for (let i = 0, ni = N - 1; i < ni; i++) {
+      const BodyA = AxisList[i];
+      const MaxX = BodyA.aabb.upperBound.x;
+
+      for (j = i + 1; j < N; j++) {
+        const BodyB = AxisList[j];
+
+        if (BodyB.aabb.lowerBound.x > MaxX) {
+          break;
+        }
+
+        if (!MultiBoxPruningBroadphase.OverlapsOnY(BodyA.aabb, BodyB.aabb)) {
+          continue;
+        }
+
+        if (!MultiBoxPruningBroadphase.OverlapsOnZ(BodyA.aabb, BodyB.aabb)) {
+          continue;
+        }
+
+        if (!this.needBroadphaseCollision(BodyA, BodyB)) {
+          continue;
+        }
+
+        this.intersectionTest(BodyA, BodyB, p1, p2);
+      }
+    }
+  }
+  /**
+   * Returns all the bodies within an AABB.
+   * @param result An array to store resulting bodies in.
+   */
+
+
+  aabbQuery(world, aabb, result) {
+    if (result === void 0) {
+      result = [];
+    }
+
+    for (let i = 0; i < world.bodies.length; i++) {
+      const Body = world.bodies[i];
+
+      if (Body.aabbNeedsUpdate) {
+        Body.updateAABB();
+      }
+
+      if (Body.aabb.overlaps(aabb)) {
+        result.push(Body);
+      }
+    }
+
+    return result;
+  }
+  /**
+   * Checks if two AABBs overlap along the y axis.
+   */
+
+
+  static OverlapsOnY(a, b) {
+    return a.lowerBound.y <= b.upperBound.y && b.lowerBound.y <= a.upperBound.y;
+  }
+  /**
+   * Checks if two AABBs overlap along the z axis.
+   */
+
+
+  static OverlapsOnZ(a, b) {
+    return a.lowerBound.z <= b.upperBound.z && b.lowerBound.z <= a.upperBound.z;
+  }
+
+}
 
 /**
  * Naive broadphase implementation, used in lack of better ones.
@@ -5451,11 +6487,16 @@ class SAPBroadphase extends Broadphase {
 
     for (let i = 0; i < world.bodies.length; i++) {
       this.axisList.push(world.bodies[i]);
-    } // Remove old handlers, if any
+    }
 
+    const oldWorld = this.world;
 
-    world.removeEventListener('addBody', this._addBodyHandler);
-    world.removeEventListener('removeBody', this._removeBodyHandler); // Add handlers to update the list of bodies.
+    if (oldWorld) {
+      // Remove old handlers, if any
+      oldWorld.removeEventListener('addBody', this._addBodyHandler);
+      oldWorld.removeEventListener('removeBody', this._removeBodyHandler);
+    } // Add handlers to update the list of bodies.
+
 
     world.addEventListener('addBody', this._addBodyHandler);
     world.addEventListener('removeBody', this._removeBodyHandler);
@@ -9689,7 +10730,7 @@ class Trimesh extends Shape {
         const n = this.vertices.length / 3,
             verts = this.vertices;
         const minx,miny,minz,maxx,maxy,maxz;
-         const v = tempWorldVertex;
+          const v = tempWorldVertex;
         for(let i=0; i<n; i++){
             this.getVertex(i, v);
             quat.vmult(v, v);
@@ -9699,12 +10740,12 @@ class Trimesh extends Shape {
             } else if(v.x > maxx || maxx===undefined){
                 maxx = v.x;
             }
-             if (v.y < miny || miny===undefined){
+              if (v.y < miny || miny===undefined){
                 miny = v.y;
             } else if(v.y > maxy || maxy===undefined){
                 maxy = v.y;
             }
-             if (v.z < minz || minz===undefined){
+              if (v.z < minz || minz===undefined){
                 minz = v.z;
             } else if(v.z > maxz || maxz===undefined){
                 maxz = v.z;
@@ -12119,7 +13160,7 @@ class World extends EventTarget {
    */
 
   /**
-   * Gravity to use when approximating the friction max force (mu*mass*gravity).
+   * Gravity to use when approximating the friction max force (mu \* mass \* gravity).
    * If undefined, global gravity will be used.
    * Use to enable friction in a World with a null gravity vector (no gravity).
    */
@@ -13039,17 +14080,20 @@ exports.ContactMaterial = ContactMaterial;
 exports.ConvexPolyhedron = ConvexPolyhedron;
 exports.Cylinder = Cylinder;
 exports.DistanceConstraint = DistanceConstraint;
+exports.DynamicAABBTreeBroadphase = DynamicAABBTreeBroadphase;
 exports.Equation = Equation;
 exports.EventTarget = EventTarget;
 exports.FrictionEquation = FrictionEquation;
 exports.GSSolver = GSSolver;
 exports.GridBroadphase = GridBroadphase;
+exports.GridSAPBroadphase = GridSAPBroadphase;
 exports.Heightfield = Heightfield;
 exports.HingeConstraint = HingeConstraint;
 exports.JacobianElement = JacobianElement;
 exports.LockConstraint = LockConstraint;
 exports.Mat3 = Mat3;
 exports.Material = Material;
+exports.MultiBoxPruningBroadphase = MultiBoxPruningBroadphase;
 exports.NaiveBroadphase = NaiveBroadphase;
 exports.Narrowphase = Narrowphase;
 exports.ObjectCollisionMatrix = ObjectCollisionMatrix;

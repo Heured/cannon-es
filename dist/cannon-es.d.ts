@@ -1119,6 +1119,48 @@ declare module "collision/ObjectCollisionMatrix" {
         setNumObjects(n: number): void;
     }
 }
+declare module "collision/DynamicAABBTreeBroadphase" {
+    import { Broadphase } from "collision/Broadphase";
+    import { AABB } from "collision/AABB";
+    import type { Body } from "objects/Body";
+    import type { World } from "world/World";
+    class DynamicAABBNode {
+        Aabb: AABB;
+        Parent: DynamicAABBNode | null;
+        Child1: DynamicAABBNode | null;
+        Child2: DynamicAABBNode | null;
+        Body: Body | null;
+        Height: number;
+        Id: number;
+        constructor();
+        IsLeaf(): boolean;
+    }
+    export class DynamicAABBTreeBroadphase extends Broadphase {
+        Root: DynamicAABBNode | null;
+        FatAABBMargin: number;
+        Bodies: Body[];
+        private BodyToLeaf;
+        private FreeList;
+        private NextId;
+        private Stack;
+        private AddBodyHandler;
+        private RemoveBodyHandler;
+        constructor(world?: World);
+        setWorld(world: World): void;
+        Clear(): void;
+        InsertBody(body: Body): void;
+        RemoveBody(body: Body): void;
+        collisionPairs(world: World, p1: Body[], p2: Body[]): void;
+        aabbQuery(world: World, aabb: AABB, result?: Body[]): Body[];
+        private UpdateTree;
+        private QueryTree;
+        private SetFatAabb;
+        private AllocateNode;
+        private InsertLeaf;
+        private RemoveLeaf;
+        private Balance;
+    }
+}
 declare module "collision/GridBroadphase" {
     import { Broadphase } from "collision/Broadphase";
     import { Vec3 } from "math/Vec3";
@@ -1134,6 +1176,40 @@ declare module "collision/GridBroadphase" {
         binLengths: number[];
         constructor(aabbMin?: Vec3, aabbMax?: Vec3, nx?: number, ny?: number, nz?: number);
         collisionPairs(world: World, pairs1: Body[], pairs2: Body[]): void;
+    }
+}
+declare module "collision/GridSAPBroadphase" {
+    import { Broadphase } from "collision/Broadphase";
+    import { Vec3 } from "math/Vec3";
+    import type { AABB } from "collision/AABB";
+    import type { Body } from "objects/Body";
+    import type { World } from "world/World";
+    export class GridSAPBroadphase extends Broadphase {
+        nx: number;
+        ny: number;
+        nz: number;
+        aabbMin: Vec3;
+        aabbMax: Vec3;
+        bins: Body[][];
+        binLengths: number[];
+        axisIndex: 0 | 1 | 2;
+        constructor(aabbMin?: Vec3, aabbMax?: Vec3, nx?: number, ny?: number, nz?: number);
+        collisionPairs(world: World, p1: Body[], p2: Body[]): void;
+        aabbQuery(world: World, aabb: AABB, result?: Body[]): Body[];
+    }
+}
+declare module "collision/MultiBoxPruningBroadphase" {
+    import { Broadphase } from "collision/Broadphase";
+    import type { AABB } from "collision/AABB";
+    import type { Body } from "objects/Body";
+    import type { World } from "world/World";
+    export class MultiBoxPruningBroadphase extends Broadphase {
+        private AxisList;
+        constructor();
+        collisionPairs(world: World, p1: Body[], p2: Body[]): void;
+        aabbQuery(world: World, aabb: AABB, result?: Body[]): Body[];
+        private static OverlapsOnY;
+        private static OverlapsOnZ;
     }
 }
 declare module "collision/SAPBroadphase" {
@@ -1554,7 +1630,10 @@ declare module "cannon-es" {
     export * from "collision/AABB";
     export * from "collision/ArrayCollisionMatrix";
     export * from "collision/Broadphase";
+    export * from "collision/DynamicAABBTreeBroadphase";
     export * from "collision/GridBroadphase";
+    export * from "collision/GridSAPBroadphase";
+    export * from "collision/MultiBoxPruningBroadphase";
     export * from "collision/NaiveBroadphase";
     export * from "collision/Ray";
     export * from "collision/RaycastResult";

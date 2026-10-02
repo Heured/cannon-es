@@ -145,9 +145,12 @@ export class SAPBroadphase extends Broadphase {
       this.axisList.push(world.bodies[i])
     }
 
-    // Remove old handlers, if any
-    world.removeEventListener('addBody', this._addBodyHandler)
-    world.removeEventListener('removeBody', this._removeBodyHandler)
+    const oldWorld = this.world
+    if (oldWorld) {
+      // Remove old handlers, if any
+      oldWorld.removeEventListener('addBody', this._addBodyHandler)
+      oldWorld.removeEventListener('removeBody', this._removeBodyHandler)
+    }
 
     // Add handlers to update the list of bodies.
     world.addEventListener('addBody', this._addBodyHandler)
