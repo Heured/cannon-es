@@ -3264,8 +3264,109 @@ const worldCornerTempPos = new Vec3();
 const worldCornersTemp = [new Vec3(), new Vec3(), new Vec3(), new Vec3(), new Vec3(), new Vec3(), new Vec3(), new Vec3()];
 
 /**
+ * For pooling objects that can be reused.
+ */
+class Pool {
+  constructor() {
+    this.objects = [];
+    this.type = Object;
+  }
+
+  /**
+   * Release an object after use
+   */
+  release() {
+    const Nargs = arguments.length;
+
+    for (let i = 0; i !== Nargs; i++) {
+      this.objects.push(i < 0 || arguments.length <= i ? undefined : arguments[i]);
+    }
+
+    return this;
+  }
+  /**
+   * Get an object
+   */
+
+
+  get() {
+    if (this.objects.length === 0) {
+      return this.constructObject();
+    } else {
+      return this.objects.pop();
+    }
+  }
+  /**
+   * Construct an object. Should be implemented in each subclass.
+   */
+
+
+  constructObject() {
+    throw new Error('constructObject() not implemented in this Pool subclass yet!');
+  }
+  /**
+   * @return Self, for chaining
+   */
+
+
+  resize(size) {
+    const objects = this.objects;
+
+    while (objects.length > size) {
+      objects.pop();
+    }
+
+    while (objects.length < size) {
+      objects.push(this.constructObject());
+    }
+
+    return this;
+  }
+
+}
+
+/**
+ * Vec3Pool
+ */
+
+class QuatPool extends Pool {
+  constructor() {
+    super(...arguments);
+    this.type = Quaternion;
+  }
+
+  /**
+   * Construct a vector
+   */
+  constructObject() {
+    return new Quaternion();
+  }
+
+}
+
+/**
+ * Vec3Pool
+ */
+
+class Vec3Pool extends Pool {
+  constructor() {
+    super(...arguments);
+    this.type = Vec3;
+  }
+
+  /**
+   * Construct a vector
+   */
+  constructObject() {
+    return new Vec3();
+  }
+
+}
+
+/**
  * BODY_TYPES
  */
+
 const BODY_TYPES = {
   /** DYNAMIC */
   DYNAMIC: 1,
@@ -3587,8 +3688,8 @@ class Body extends EventTarget {
 
 
   addShape(shape, _offset, _orientation) {
-    const offset = new Vec3();
-    const orientation = new Quaternion();
+    const offset = Body.Pool_Vec3.get();
+    const orientation = Body.Pool_Quat.get();
 
     if (_offset) {
       offset.copy(_offset);
@@ -3870,7 +3971,7 @@ class Body extends EventTarget {
 
 
   getVelocityAtWorldPoint(worldPoint, result) {
-    const r = new Vec3();
+    const r = tmpVec;
     worldPoint.vsub(this.position, r);
     this.angularVelocity.cross(r, result);
     this.velocity.vadd(result, result);
@@ -3952,6 +4053,8 @@ Body.sleepyEvent = {
 Body.sleepEvent = {
   type: 'sleep'
 };
+Body.Pool_Vec3 = new Vec3Pool();
+Body.Pool_Quat = new QuatPool();
 const tmpVec = new Vec3();
 const tmpQuat = new Quaternion();
 const updateAABB_shapeAABB = new AABB();
@@ -4119,7 +4222,7 @@ class Broadphase {
 
 
   static boundingSphereCheck(bodyA, bodyB) {
-    const dist = new Vec3(); // bsc_dist;
+    const dist = bsc_dist; // bsc_dist;
 
     bodyA.position.vsub(bodyB.position, dist);
     const sa = bodyA.shapes[0];
@@ -4147,7 +4250,7 @@ const Broadphase_makePairsUnique_temp = {
 };
 const Broadphase_makePairsUnique_p1 = [];
 const Broadphase_makePairsUnique_p2 = [];
-new Vec3();
+const bsc_dist = new Vec3();
 
 /**
  * Computes the surface area of an AABB.
@@ -11206,87 +11309,6 @@ function sortById(a, b) {
   return b.id - a.id;
 }
 
-/**
- * For pooling objects that can be reused.
- */
-class Pool {
-  constructor() {
-    this.objects = [];
-    this.type = Object;
-  }
-
-  /**
-   * Release an object after use
-   */
-  release() {
-    const Nargs = arguments.length;
-
-    for (let i = 0; i !== Nargs; i++) {
-      this.objects.push(i < 0 || arguments.length <= i ? undefined : arguments[i]);
-    }
-
-    return this;
-  }
-  /**
-   * Get an object
-   */
-
-
-  get() {
-    if (this.objects.length === 0) {
-      return this.constructObject();
-    } else {
-      return this.objects.pop();
-    }
-  }
-  /**
-   * Construct an object. Should be implemented in each subclass.
-   */
-
-
-  constructObject() {
-    throw new Error('constructObject() not implemented in this Pool subclass yet!');
-  }
-  /**
-   * @return Self, for chaining
-   */
-
-
-  resize(size) {
-    const objects = this.objects;
-
-    while (objects.length > size) {
-      objects.pop();
-    }
-
-    while (objects.length < size) {
-      objects.push(this.constructObject());
-    }
-
-    return this;
-  }
-
-}
-
-/**
- * Vec3Pool
- */
-
-class Vec3Pool extends Pool {
-  constructor() {
-    super(...arguments);
-    this.type = Vec3;
-  }
-
-  /**
-   * Construct a vector
-   */
-  constructObject() {
-    return new Vec3();
-  }
-
-}
-
 // Naming rule: based of the order in SHAPE_TYPES,
 // the first part of the method is formed by the
 // shape type that comes before, in the second part
@@ -14061,4 +14083,4 @@ const endShapeContactEvent = {
   shapeB: null
 };
 
-export { AABB, ArrayCollisionMatrix, BODY_SLEEP_STATES, BODY_TYPES, Body, Box, Broadphase, COLLISION_TYPES, ConeTwistConstraint, Constraint, ContactEquation, ContactMaterial, ConvexPolyhedron, Cylinder, DistanceConstraint, DynamicAABBTreeBroadphase, Equation, EventTarget, FrictionEquation, GSSolver, GridBroadphase, GridSAPBroadphase, Heightfield, HingeConstraint, JacobianElement, LockConstraint, Mat3, Material, MultiBoxPruningBroadphase, NaiveBroadphase, Narrowphase, ObjectCollisionMatrix, Particle, Plane, PointToPointConstraint, Pool, Quaternion, RAY_MODES, Ray, RaycastResult, RaycastVehicle, RigidVehicle, RotationalEquation, RotationalMotorEquation, SAPBroadphase, SHAPE_TYPES, SPHSystem, Shape, Solver, Sphere, SplitSolver, Spring, Transform, Trimesh, Vec3, Vec3Pool, WheelInfo, World };
+export { AABB, ArrayCollisionMatrix, BODY_SLEEP_STATES, BODY_TYPES, Body, Box, Broadphase, COLLISION_TYPES, ConeTwistConstraint, Constraint, ContactEquation, ContactMaterial, ConvexPolyhedron, Cylinder, DistanceConstraint, DynamicAABBTreeBroadphase, Equation, EventTarget, FrictionEquation, GSSolver, GridBroadphase, GridSAPBroadphase, Heightfield, HingeConstraint, JacobianElement, LockConstraint, Mat3, Material, MultiBoxPruningBroadphase, NaiveBroadphase, Narrowphase, ObjectCollisionMatrix, Particle, Plane, PointToPointConstraint, Pool, QuatPool, Quaternion, RAY_MODES, Ray, RaycastResult, RaycastVehicle, RigidVehicle, RotationalEquation, RotationalMotorEquation, SAPBroadphase, SHAPE_TYPES, SPHSystem, Shape, Solver, Sphere, SplitSolver, Spring, Transform, Trimesh, Vec3, Vec3Pool, WheelInfo, World };

@@ -973,6 +973,14 @@ declare module "collision/AABB" {
         overlapsRay(ray: Ray): boolean;
     }
 }
+declare module "utils/QuatPool" {
+    import { Quaternion } from "math/Quaternion";
+    import { Pool } from "utils/Pool";
+    export class QuatPool extends Pool {
+        type: typeof Quaternion;
+        constructObject(): Quaternion;
+    }
+}
 declare module "objects/Body" {
     import { EventTarget } from "utils/EventTarget";
     import { Vec3 } from "math/Vec3";
@@ -982,6 +990,8 @@ declare module "objects/Body" {
     import type { Shape } from "shapes/Shape";
     import type { Material } from "material/Material";
     import type { World } from "world/World";
+    import { QuatPool } from "utils/QuatPool";
+    import { Vec3Pool } from "utils/Vec3Pool";
     export const BODY_TYPES: {
         readonly DYNAMIC: 1;
         readonly STATIC: 2;
@@ -1013,6 +1023,8 @@ declare module "objects/Body" {
         static sleepEvent: {
             type: string;
         };
+        static Pool_Vec3: Vec3Pool;
+        static Pool_Quat: QuatPool;
         id: number;
         index: number;
         world: World | null;
@@ -1677,6 +1689,7 @@ declare module "cannon-es" {
     export * from "utils/Pool";
     export * from "utils/EventTarget";
     export * from "utils/Vec3Pool";
+    export * from "utils/QuatPool";
     export * from "world/Narrowphase";
     export * from "world/World";
 }

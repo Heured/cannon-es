@@ -7,6 +7,8 @@ import { Box } from '../shapes/Box'
 import type { Shape } from '../shapes/Shape'
 import type { Material } from '../material/Material'
 import type { World } from '../world/World'
+import { QuatPool } from '../utils/QuatPool'
+import { Vec3Pool } from '../utils/Vec3Pool'
 
 /**
  * BODY_TYPES
@@ -111,6 +113,9 @@ export class Body extends EventTarget {
    * @event sleep
    */
   static sleepEvent = { type: 'sleep' }
+
+  static Pool_Vec3 = new Vec3Pool()
+  static Pool_Quat = new QuatPool()
 
   /**
    * Identifier of the body.
@@ -634,8 +639,8 @@ export class Body extends EventTarget {
    * @return The body object, for chainability.
    */
   addShape(shape: Shape, _offset?: Vec3, _orientation?: Quaternion): Body {
-    const offset = new Vec3()
-    const orientation = new Quaternion()
+    const offset = Body.Pool_Vec3.get()
+    const orientation = Body.Pool_Quat.get()
 
     if (_offset) {
       offset.copy(_offset)
@@ -923,7 +928,7 @@ export class Body extends EventTarget {
    * @return The result vector.
    */
   getVelocityAtWorldPoint(worldPoint: Vec3, result: Vec3): Vec3 {
-    const r = new Vec3()
+    const r = tmpVec
     worldPoint.vsub(this.position, r)
     this.angularVelocity.cross(r, result)
     this.velocity.vadd(result, result)
